@@ -1,0 +1,681 @@
+
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+
+import org.lwjgl.input.Mouse;
+import org.newdawn.slick.AppGameContainer;
+import org.newdawn.slick.BasicGame;
+import org.newdawn.slick.Color;
+import org.newdawn.slick.GameContainer;
+import org.newdawn.slick.Graphics;
+import org.newdawn.slick.Input;
+import org.newdawn.slick.SlickException;
+import org.newdawn.slick.geom.Rectangle;
+	
+/*		Other things to do----------------------------------------------------------------------------------------------------
+ * 
+ * 			[ ]Create more advanced rendering.
+ * 
+ * 			[ ]Create method of interaction with mouse (pull, vortex), expressed as method containing a listener in the main algorithm. Use 'interaction mode' subclasses
+ * 
+ * 			[ ]Handle Collisions with finite objects. Have object adding control with graphical display.
+ * 
+ * 			[ ]Make android app version that uses tilt sensor
+ */
+
+
+/* Git Hub Improvement Suggestions 
+*			[ ] Eliminate edge stacking by making border out of solid, fixed-position particles that exert radial pressure
+* 			[ ] Consider adapting those particles into being structures that can float, particle structures and not finite artificial objects
+* 			[ ] Figure out that spring system
+* 			[ ] Run sumulation with small particles, probably in a wide, shallow environment. Make interactive boats, or even better, interactive crew
+* 				with access to control interface points on boats, for some sort of game experience. 
+*/
+
+public class Container extends BasicGame {
+	//initialization parameters
+	static int startCount=600;
+	static int[] startSize = {800,600};
+	int runSpeed=60;
+	
+	//Particle Parameters
+	static float interactionRadius = 22;
+	
+	//Rendering Parameters
+	static float particleCircleRadius = 5;
+	
+	//Border Parameters
+	static float xEdges = startSize[0]-2*particleCircleRadius;
+	static float safeRight=startSize[0]-particleCircleRadius;
+	static float safeLeft=particleCircleRadius;
+	static float safeBottom=startSize[1]-particleCircleRadius;
+	static float safeTop=particleCircleRadius;
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	Input input;
+	
+	List <Particle> p = new ArrayList<Particle>(startCount+20); 
+	static float[] gravity= {0,.08f};
+	
+	HashMap<List<Integer>, HashCell> map;	
+	HashMap <List<Integer>, List<Particle>> particleNeighborPair = new HashMap <List<Integer>, List<Particle>>();
+	
+	@Override
+	public void init(GameContainer gc) throws SlickException {
+		setParticleLayout();
+		
+    }
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	//main algorithm                                                                                                                                                                                                                                                                            //                                                                                                                                              //
+    @Override                                                                                                                                       
+    public void update(GameContainer gc, int delta) throws SlickException {
+    	listenForVariousInput(gc);
+    	
+    	applyClickModeBehavior();
+    	shiftGravity();
+    	waves();
+		//apply gravity
+    	for (int j =0; j<p.size();j++){                                                                                                               
+    		Particle particle= p.get(j);        	                                                                                                        
+    		particle.setVelocity(particle.velocity[0]+gravity[0], particle.velocity[1]+gravity[1]);                                                               
+    	}
+    	
+		applyViscosityImpulses();     
+		
+		//predict positions
+    	for (int k=0; k<p.size();k++){                                                                                                              
+    		Particle particle=p.get(k);									                                                                                                                 
+    		//save previous position                                                                                                                
+    		particle.setPreviousPosition(particle.x, particle.y);               
+    		
+    		
+                                                                                                                                                    
+    		//advance without collision/conditional checks. A.k.a predicted position                                                                
+    		moveAndUpdateHash(particle, particle.velocity[0], particle.velocity[1]);
+    	}                                                                                                                                           
+    	                                                                                                                                            
+    	doubleDensityRelaxation();                                                                                                                  
+    	                                                                                                                                            
+    	//resolve solid body collisions                                                                                                             
+    	                                                                                                                                            
+    	for (int i=0;i<p.size();i++){                                                                                                               
+    		//use previous positions to compute velocity
+    		Particle particle = p.get(i);
+    		particle.recalculateVelocity();                                                                                                             
+    		particle.updateCircle();                                                                                                                    
+    	}    	                                                                                                                                    
+    }                                                                                                                                               
+ //~~~~~~~~~~~~~~~~~~~~Render~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    
+    public void render(GameContainer gc, Graphics g) throws SlickException {
+    		g.setColor(new Color(220, 220, 220));
+    		g.fill(background);
+    		g.setColor(new Color(5,5,255));
+    		for(int i =0;i<p.size();i++){
+    			g.fill(p.get(i).c);
+    		}
+    		if (modeSelected=="removeParticle"){
+    			if (hovered!=null){
+    				g.setColor(Color.green);
+    				g.fill(hovered.c);
+    			}
+    		}
+    		g.setColor(Color.black);
+    		g.drawString(display, 2, 1);
+    		if (gravityDisplayed){
+    			g.drawString("["+Math.round(gravity[0]*100)/100.0+",\n"+Math.round(gravity[1]*100)/100.0+"]", startSize[0]-90, 1);
+    		}
+    }
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//||||||----------|||||||-----||||||||Primary Component Algorithms|||||||||||---------------||||||------||||||||||-------
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    void applyViscosityImpulses(){
+    	particleNeighborPair.clear();
+    	
+    	//create ParticleNeighborPairs
+    	for (int i = 0;i<p.size();i++){    
+    		Particle particle= p.get(i);      
+    		ArrayList<Particle> Neighbors = getNeighbors(particle);
+    		for (int k=0;k<Neighbors.size();k++){
+    			List <Integer> pairKey=findPairKey(particle, Neighbors.get(k));
+    			if(!particleNeighborPair.containsKey(pairKey)){
+    				List<Particle> normalized=createNormalizedParticleList(particle, Neighbors.get(k));
+    				particleNeighborPair.put(pairKey, normalized);
+    			}
+    		}
+    	}
+    	
+    	for (List<Particle> particles:particleNeighborPair.values()){
+    		Particle first = particles.get(0);
+    		Particle second = particles.get(1);
+    		float q =(float) (findDistance(first, second)/interactionRadius);
+    		if (q<1){
+    			//find inward radial velocity
+    			float[] unitVector = findDisplacementUnitVector(first, second);
+    			float radialVelocityX = (first.velocity[0]-second.velocity[0])*unitVector[0];
+    			float radialVelocityY = (first.velocity[1]-second.velocity[1])*unitVector[1];
+    			//apply impulses
+    			if (radialVelocityX>0){
+    				float impulse = (float) (((1-q)*(Particle.theta*radialVelocityX+Particle.beta*Math.pow(radialVelocityX, 2))*unitVector[0])/2);
+    				first.velocity[0]-=impulse;
+    				second.velocity[0]+=impulse;
+    			}
+    			if (radialVelocityY>0){
+    				float impulse = (float) (((1-q)*(Particle.theta*radialVelocityY+Particle.beta*Math.pow(radialVelocityY, 2))*unitVector[1])/2);
+    				first.velocity[1]-=impulse;
+    				second.velocity[1]+=impulse;
+    			}
+    		}
+    	}
+    }
+//______________________________________________________________________________________________________________________________
+    void doubleDensityRelaxation(){
+    	for(int i =0;i<p.size();i++){ 
+    		Particle particle = p.get(i); 
+    		particle.density=0;
+    		particle.nearDensity=0;
+    		ArrayList<Particle> Neighbors=getNeighbors(particle);
+    		float[] radii=new float[Neighbors.size()];
+    		float[] cues=new float[Neighbors.size()];
+    		//set the "q"s for each particle
+    		for (int k =0;k<Neighbors.size();k++){
+    			radii[k]=findDistance(particle, Neighbors.get(k));
+    			cues[k]=(float) (radii[k]/interactionRadius);
+    		}
+    		//compute density and nearDensity
+    		for (int k=0;k<Neighbors.size();k++){
+    			float q=cues[k];
+    			if (q<1){
+    				particle.density+=Math.pow(1-q,2);
+    				particle.nearDensity+=Math.pow(1-q, 3);
+    			}
+    		}
+    		//compute pressure and nearPressure
+    		particle.pressure=(float) (Particle.stiffness*(particle.density-Particle.restDensity));
+    		particle.nearPressure=(float) (Particle.nearStiffness*(particle.nearDensity));
+    		float dxX=0;
+    		float dxY=0;
+    		for(int k = 0; k<Neighbors.size();k++){
+    			float q=cues[k];
+    			if(q<1){
+    				//apply displacement
+    				Particle neighbor=Neighbors.get(k);
+    				
+    				float[] unitVector=findDisplacementUnitVector(particle, neighbor);
+    				float unitVectorX=unitVector[0];
+    				float unitVectorY=unitVector[1];
+    				float displacementX=(float) ((particle.pressure*(1-q)+particle.nearPressure*Math.pow((1-q), 2))*unitVectorX);
+    				float displacementY=(float) ((particle.pressure*(1-q)+particle.nearPressure*Math.pow((1-q), 2))*unitVectorY);                   
+    				moveAndUpdateHash(neighbor, displacementX/2, displacementY/2);                                                                  
+    				dxX-=(displacementX/2);                                                                                                         
+    				dxY-=(displacementY/2);                                                                                                         
+    			}                                                                                                                                   
+    		}                                                                                                                                       
+    		moveAndUpdateHash(particle,dxX,dxY);                                                                                                    
+    	}                                                                                                                                           
+    }
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//==========================Auxiliary Interaction Methods=========================================
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+boolean hintsHidden = false;
+void listenForVariousInput(GameContainer gc){
+	input = gc.getInput();
+	if(input.isKeyPressed(Input.KEY_H)){
+		if (display!=""){
+			hintsHidden=true;			
+			lastDisplay=display;
+			display="";
+		}
+		else{
+			hintsHidden=false;
+			display=lastDisplay;
+		}
+	}
+	else if(input.isKeyPressed(Input.KEY_Q)){
+		showDisplay("Press \"v\" for vortex-mode(\"t\" to toggle), \"a\" for add-mode,\n\"r\" for remove-mode, \"g\" for gravity options, or \"w\" to toggle waves");
+	}
+	else if (input.isKeyPressed(Input.KEY_V)){
+		modeSelected="vortex";
+		toggleVortex=false;
+		showDisplay("Hold click to spin particles around mouse, press \"q\" to go back");
+	}
+	else if (input.isKeyPressed(Input.KEY_T)){
+		modeSelected="vortex";
+		if (toggleVortex){
+			toggleVortex=false;
+		}
+		else{
+			toggleVortex=true;
+		}
+		showDisplay("Constant vortex around mouse, press \"q\" to go back");
+	}
+	else if (input.isKeyPressed(Input.KEY_A)){
+		modeSelected="addParticle";
+		showDisplay("Click to add particle at mouse, press \"q\" to go back");
+	}
+	else if (input.isKeyPressed(Input.KEY_R)){
+		modeSelected="removeParticle";
+		showDisplay("Click to remove nearest particle, press \"q\" to go back");
+	}
+	else if(input.isKeyPressed(Input.KEY_G)){
+		showDisplay("Press arrow key to shift gravity in that direction, \ntoggle between absolute/incremental shifts with \"i\". \n\"0\" removes gravity, \"d\" displays it. \"q\" to go back");
+	}
+	else if(input.isKeyPressed(Input.KEY_I)){
+		incrementMode=!incrementMode;
+	}
+	else if(input.isKeyPressed(Input.KEY_D)){
+		gravityDisplayed=!gravityDisplayed;
+	}
+	else if(input.isKeyPressed(Input.KEY_W)){
+		wavesOn=!wavesOn;
+		gravity[0]=0;
+		gravity[1]=.08f;
+	}
+	
+}
+
+String modeSelected = "vortex";
+void applyClickModeBehavior(){
+		if(modeSelected=="vortex"){
+			vortex();
+		}
+		else if (modeSelected=="addParticle"){
+			addParticle();
+		}
+		else{
+			removeParticle();
+		}
+}
+void addParticle(){
+	if (input.isMousePressed(Input.MOUSE_LEFT_BUTTON)){
+		Particle particle = new Particle(Mouse.getX(), input.getMouseY());
+		p.add(particle);
+		List<Integer> key=findCentralHashKey(particle);
+		if(map.containsKey(key)){
+			map.get(key).contained.add(particle);   
+		}
+		else{
+			HashCell cell=new HashCell(key, interactionRadius);
+			map.put(key, cell);
+			cell.contained.add(particle);  
+		}
+	}
+}
+//placeholder value;
+Particle hovered = new Particle(0,0);
+void removeParticle(){
+	float[] mousePoint = {input.getMouseX(),input.getMouseY()}; 
+	List<HashCell> closeCells=getCloseHashCells(mousePoint);
+	Particle closest = null;
+	//initialized greater than possible max value
+	float closestDistance=2000;
+	for (int i = 0;i<closeCells.size();i++){
+		List<Particle> containedParticles = closeCells.get(i).contained;
+		for (int k = 0; k<containedParticles.size();k++){
+			Particle particle = containedParticles.get(k);
+			float distance = findDistance(particle, mousePoint);
+			if (distance<closestDistance){
+				closest=particle;
+				closestDistance=distance;
+			}
+		}
+	}
+	hovered=closest;
+	if(input.isMousePressed(Input.MOUSE_LEFT_BUTTON)&&closest!=null){
+		List<Integer> key = findCentralHashKey(closest);
+		p.remove(closest);
+		map.get(key).contained.remove(closest);
+	}
+}
+boolean toggleVortex=false;
+void vortex(){
+	
+	if (input.isMouseButtonDown(Input.MOUSE_LEFT_BUTTON)||toggleVortex==true){
+		float[] eye = {Mouse.getX(), input.getMouseY()};
+		for (int i = 0; i<p.size();i++){
+			Particle particle = p.get(i);
+			float distance = findDistance(particle, eye);
+			float[] direction = findUnitVector(particle, eye);
+			
+			float angle = distance/100;
+			if (angle<1){
+				angle = 1;
+			}
+			angle = (float) ((Math.PI*.25f)/Math.pow(angle, 1.0));
+			rotateUnitVector(direction, angle);
+			
+			float intensity=(float) (Math.PI*.25f/Math.pow(distance/100, 1)*.24);
+			
+			particle.setVelocity(particle.velocity[0]+direction[0]*intensity, particle.velocity[1]+direction[1]*intensity);
+		}
+	}
+}
+boolean gravityDisplayed=false;
+boolean incrementMode = true;
+void shiftGravity(){
+	if (input.isKeyPressed(Input.KEY_0)){
+		gravity=new float[] {0,0};
+	}
+	else{
+		if (input.isKeyPressed(Input.KEY_LEFT)){
+			if (incrementMode){
+				gravity[0]-=.01;
+			}
+			else{
+				if (gravity[0]==0){
+					gravity[0]=-.08f;
+				}
+				else{
+					gravity[0]=0;
+				}
+			}
+		}
+		else if (input.isKeyPressed(Input.KEY_RIGHT)){
+			if (incrementMode){
+				gravity[0]+=.01;
+			}
+			else{
+				if (gravity[0]==0){
+					gravity[0]=.08f;
+				}
+				else{
+					gravity[0]=0;
+				}
+			}
+		}
+		if (input.isKeyPressed(Input.KEY_UP)){
+			if (incrementMode){
+				gravity[1]-=.01;
+			}
+			else{
+				if (gravity[1]==0){
+					gravity[1]=-.08f;
+				}
+				else{
+					gravity[1]=0;
+				}
+			}
+		}
+		else if (input.isKeyPressed(Input.KEY_DOWN)){
+			if (incrementMode){
+				gravity[1]+=.01;
+			}
+			else{
+				if (gravity[1]==0){
+					gravity[1]=.08f;
+				}
+				else{
+					gravity[1]=0;
+				}
+			}
+		}
+	}
+}
+boolean wavesOn=false;
+float[] gravities = {-.03f, -.02f, -.015f, -.01f, -.005f, 0, .005f, .01f, .015f, .02f, .03f};
+int gravityPosition=0;
+int shiftCooldown = 0;
+void waves(){
+	if (wavesOn){
+		if (shiftCooldown == 0){
+			if (gravityPosition <gravities.length-1){
+				gravityPosition++;
+			}
+			else{
+				gravityPosition=0;
+			}
+			gravity[0]=gravities[gravityPosition];
+			shiftCooldown=20;
+		}
+		else{
+			shiftCooldown-=1;
+		}
+	}
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~                                                 
+//==========================Convenience Methods====================================================                                                 
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	void showDisplay(String displayString){
+		if (!hintsHidden){
+			display=displayString;
+		}
+	}
+    ArrayList<Particle> getNeighbors(Particle particle){
+    	
+    	List<Integer> centralKey=findCentralHashKey(particle);                                                                                      
+    	HashCell centralHashCell=map.get(centralKey);                                                                                               
+    	ArrayList<Particle> neighbors=new ArrayList<Particle>();                                                                                    
+    	neighbors.addAll(centralHashCell.contained);                                                                                                
+    	neighbors.remove(particle);                                                                                                                 
+    	int keyX=centralKey.get(0);                                                                                                                 
+    	int keyY=centralKey.get(1);                                                                                                                 
+    	ArrayList<List<Integer>> otherKeys = new ArrayList<List<Integer>>(8);                                                                       
+    	                                                                                                                                            
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX-1, keyY-1}));                                                                               
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX, keyY-1}));                                                                                 
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX+1, keyY-1}));                                                                               
+    	                                                                                                                                            
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX-1, keyY}));                                                                                 
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX+1, keyY}));                                                                                 
+    	                                                                                                                                            
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX-1, keyY+1}));                                                                               
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX, keyY+1}));                                                                                 
+    	otherKeys.add(Arrays.asList(new Integer[] {keyX+1, keyY+1}));                                                                               
+    	for (List<Integer> key :otherKeys){                                                                                                         
+    		if (map.containsKey(key)){                                                                                                              
+    			neighbors.addAll(map.get(key).contained);                                                                                           
+    		}                                                                                                                                       
+    	}                                                                                                                                           
+    	return neighbors;                                                                                                                           
+    }
+    ArrayList<HashCell> getCloseHashCells(float[] point){
+    	
+    	List<Integer> centralKey=findCentralHashKey(point);                                                                                      
+    	ArrayList<HashCell> closeCells = new ArrayList<HashCell>(9);
+    	closeCells.add(map.get(centralKey));
+    	
+    	Integer keyX = centralKey.get(0);
+    	Integer keyY = centralKey.get(1);
+    	
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX-1, keyY-1})));                                                                               
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX, keyY-1})));                                                                                 
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX+1, keyY-1})));                                                                               
+                                                                                                                    
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX-1, keyY})));                                                                                 
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX+1, keyY})));                                                                                 
+
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX-1, keyY+1})));                                                                               
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX, keyY+1})));                                                                                 
+    	closeCells.add(map.get(Arrays.asList(new Integer[] {keyX+1, keyY+1})));
+    	
+    	for (int i = 0; i < closeCells.size();i++){
+    		if (closeCells.get(i)==null){
+    			closeCells.remove(i);
+    			i--;
+    		}
+    	}
+    	return closeCells;                                                                                                                           
+    }
+    void moveAndUpdateHash(Particle particle, float x, float y){                                                                             
+                                                                                                                                                    
+    	List<Integer>oldKey=findCentralHashKey(particle);                                                                                           
+                                                                                                                                                    
+    	particle.x+=x;                                                                                                                              
+    	particle.y+=y;
+    	particle.compensateForContainerCollisions();                                                                                                
+    	List<Integer>newKey=findCentralHashKey(particle);                                                                                           
+                                                                                                                                                    
+    	if(!oldKey.equals(newKey)){                                                                                                                 
+    		if(map.containsKey(newKey)){                                                                                                            
+    			map.get(newKey).contained.add(particle);                                                                                            
+    			map.get(oldKey).contained.remove(particle);                                                                                         
+    		}else{                                                                                                                                  
+    			HashCell cell = new HashCell(newKey, interactionRadius);                                                            
+    			cell.contained.add(particle);                                                                                                       
+    			map.put(newKey, cell);                                                                                                              
+    			map.get(oldKey).contained.remove(particle);                                                                                         
+    		}                                                                                                                                       
+			if(map.get(oldKey).contained.size()==0){                                                                                                
+				map.remove(oldKey);                                                                                                                 
+			}                                                                                                                                       
+    	}                                                                                                                                           
+    }                                                                                                                                               
+                                                                                                                                                    
+    float[] findDisplacementUnitVector(Particle from, Particle to){                                                                                             
+    	float xDist = -(to.x-from.x);
+    	float yDist = -(to.y-from.y);
+    	float magnitude=(float) Math.sqrt((Math.pow(xDist, 2)+Math.pow(yDist, 2)));                                                                            
+    	                                                                                                                                            
+    	return new float[] {(float)xDist/magnitude, (float)yDist/magnitude};		
+    }
+    float[] findUnitVector(Particle from, float[] to){                                                                                             
+    	float xDist = to[0]-from.x;
+    	float yDist = to[1]-from.y;
+    	float magnitude=(float) Math.sqrt((Math.pow(xDist, 2)+Math.pow(yDist, 2)));                                                                            
+    	                                                                                                                                            
+    	return new float[] {(float)xDist/magnitude, (float)yDist/magnitude};		
+    }
+    
+    List<Integer> findCentralHashKey(Particle particle){
+    	List<Integer> l=Arrays.asList(new Integer[] {(int)(particle.x/interactionRadius),(int)(particle.y/interactionRadius)});
+    	return l;
+    }
+    List<Integer> findCentralHashKey(float[] point){
+    	List<Integer> l=Arrays.asList(new Integer[] {(int)(point[0]/interactionRadius),(int)(point[1]/interactionRadius)});
+    	return l;
+    }
+    List<Integer> findPairKey(Particle particle1, Particle particle2){
+    	List<Integer> l;
+    	if(particle1.idNum<particle2.idNum){
+    		l=Arrays.asList(new Integer[] {particle1.idNum, particle2.idNum});
+    	}else{
+    		l=Arrays.asList(new Integer[] {particle2.idNum, particle1.idNum});
+    	}
+    	return l;
+    }
+    float findDistance(Particle particle1, Particle particle2){
+    	return (float)Math.sqrt(Math.pow(particle1.x-particle2.x, 2)+Math.pow(particle1.y-particle2.y, 2));	
+    }
+    float findDistance(Particle particle1, float[] point){
+    	return (float)Math.sqrt(Math.pow(particle1.x-point[0], 2)+Math.pow(particle1.y-point[1], 2));	
+    }
+    
+    List<Particle> createNormalizedParticleList(Particle particle1, Particle particle2){
+    	List<Particle> ps;
+    	if(particle1.idNum<particle2.idNum){
+    		ps=Arrays.asList(new Particle[] {particle1, particle2});
+    	}else{
+    		ps=Arrays.asList(new Particle[] {particle2, particle1});
+    	}
+    	return ps;
+    }
+    float findAngle(float[] vector){
+    	float angle= (float) Math.atan(vector[1]/vector[0]);
+    	if(vector[0]>=0){
+    		if (!(vector[1]>=0)){
+    			angle=(float) (Math.PI*2-angle);
+    		}
+    	}
+    	else{
+    		if (vector[1]>=0){
+    			angle = (float) (Math.PI-angle);
+    		}
+    		else{
+    			angle = (float) ((Math.PI*1.5f)-angle);
+    		}
+    	}
+    	return angle;
+    }
+
+	void rotateUnitVector(float[] vector, float angle){
+		float cosA=(float) Math.cos(angle);
+		float sinA=(float) Math.sin(angle);
+		float rx = vector[0]*cosA-vector[1]*sinA;
+		float ry = vector[0]*sinA+vector[1]*cosA;
+		vector[0]=rx;
+		vector[1]=ry;
+	}
+	
+	//a little off but good enough
+	void setParticleLayout(){
+		int particlesPerLine=(int) (xEdges/interactionRadius);
+		
+		int row = 1;
+		
+		int i = 0;
+		//break label!
+		finished:
+		while(i<startCount){
+			for (int pos = 0; pos<particlesPerLine;pos++){
+				if(i>=startCount){
+					break finished;
+				}
+				else{
+					int offset;
+					if (row%2==1){
+						offset=(int) (xEdges%interactionRadius);
+					}
+					else{
+						offset=0;
+					}
+					p.add(new Particle((float) safeLeft+interactionRadius*pos+offset, safeBottom-row*interactionRadius));
+				}
+				i++;
+			}
+			row++;
+		}
+		map=new HashMap<List<Integer>, HashCell>(p.size()); 
+		for (int j=0;j<p.size();j++){   
+			List<Integer> mapKey=findCentralHashKey(p.get(j));   
+			if(map.containsKey(mapKey)){
+				map.get(mapKey).contained.add(p.get(j));   
+			}
+			else{
+				HashCell cell=new HashCell(mapKey, interactionRadius);
+				map.put(mapKey, cell);
+				cell.contained.add(p.get(j));  
+			}
+		}
+	}
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+///\\//\/\/\/\//\/\/\/\/\\/\\/\/\/\Main Method/\\/\/\/\/\//\\/\/\/\/\/\/\/\/\/\/\\\
+    public Container(){
+    	super("Fluid Simulator");
+    	
+    }
+    
+    //This is a mess
+    public void runSlick(int[] startSize, int particleCount, int runSpeed, float[] gravity, float particleSize) throws SlickException{
+    	AppGameContainer app = new AppGameContainer(new Container());
+    	Container.gravity = gravity;
+    	Container.startCount=particleCount;
+    	Container.interactionRadius=particleSize;
+    	Container.startSize=startSize;
+    	
+    	xEdges = startSize[0]-2*particleCircleRadius; 
+    	safeRight=startSize[0]-particleCircleRadius;  
+    	safeLeft=particleCircleRadius;                
+    	safeBottom=startSize[1]-particleCircleRadius; 
+    	safeTop=particleCircleRadius;
+    	Container.background = new Rectangle(0,0,startSize[0],startSize[1]);
+    	
+    	app.setDisplayMode(startSize[0],startSize[1], false);
+    	app.setTargetFrameRate(runSpeed);
+    	app.setShowFPS(false);
+    	app.start();
+    }			
+}
